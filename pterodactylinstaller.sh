@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ======================================================
-# Pterodactyl VPS Installer by Developfluff
-# Version: 1.0.1
+# Full Pterodactyl VPS Installer by Developfluff
+# Version: 1.0.0
 # GitHub: https://github.com/developfluffo-cloud/installers-pterodactyl
 # YouTube: https://youtube.com/@Developer
 # License: MIT
@@ -10,10 +10,10 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-APP_NAME="DevelopPanel Pterodactyl Installer"
-VERSION="1.0.1"
+APP_NAME="DevelopPanel Full Pterodactyl Installer"
+VERSION="1.0.0"
 BRANDING="Powered by Developfluff"
-DEFAULT_INSTALL_DIR="/opt/DevelopPanel"
+INSTALL_DIR="/var/www/pterodactyl"
 
 info(){ printf "\n[INFO] %s\n" "$*"; }
 warn(){ printf "\n[WARN] %s\n" "$*"; }
@@ -32,112 +32,115 @@ cat <<EOF
 EOF
 }
 
-usage(){
-cat <<EOF
-Usage: bash pterodactyl-installer.sh [options]
-
-Options:
-  --help        Show this help message
-  --version     Print version
-  --about       Show about / credits
-  --dir PATH    Install into PATH instead of default ($DEFAULT_INSTALL_DIR)
-  --dry-run     Show actions without performing them
-EOF
-}
-
-about(){
-cat <<EOF
-$BRANDING
-Created by Developfluff
-YouTube: https://youtube.com/@Developer
-
-This script is original work. Not a copy.
-EOF
+# ----------------------------
+# Update & dependencies
+# ----------------------------
+update_system(){
+    info "Updating system..."
+    sudo apt update && sudo apt upgrade -y
+    info "Installing dependencies..."
+    sudo apt install -y software-properties-common curl wget unzip git tar
+    sudo apt install -y php-cli php-mbstring php-bcmath php-fpm php-gd php-curl php-mysql php-xml composer mariadb-server mariadb-client nginx
 }
 
 # ----------------------------
-# Parse arguments
+# Docker installation
 # ----------------------------
-DRY_RUN="no"
-INSTALL_DIR="$DEFAULT_INSTALL_DIR"
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --help) usage; exit 0 ;;
-    --version) echo "$VERSION"; exit 0 ;;
-    --about) about; exit 0 ;;
-    --dir) shift; INSTALL_DIR="$1"; shift ;;
-    --dry-run) DRY_RUN="yes"; shift ;;
-    *) warn "Unknown option: $1"; usage; exit 1 ;;
-  esac
-done
+install_docker(){
+    info "Installing Docker..."
+    curl -fsSL https://get.docker.com | sudo bash
+    info "Installing Docker Compose..."
+    sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+    sudo chmod +x /usr/local/bin/docker-compose
+}
 
 # ----------------------------
-# Main installer
+# Pterodactyl Panel installation
 # ----------------------------
-banner
-info "Starting installer..."
-
-if [[ "$DRY_RUN" == "no" ]]; then
+install_panel(){
+    info "Installing Pterodactyl Panel in $INSTALL_DIR..."
     sudo mkdir -p "$INSTALL_DIR"
-    sudo chown "$(id -u):$(id -g)" "$INSTALL_DIR"
-fi
+    sudo chown -R "$USER":"$USER" "$INSTALL_DIR"
+    git clone https://github.com/pterodactyl/panel.git "$INSTALL_DIR"
+    cd "$INSTALL_DIR"
+    git checkout release
+    composer install --no-dev --optimize-autoloader
+    cp .env.example .env
+    php artisan key:generate
+}
 
-info "Creating sample payload files..."
-if [[ "$DRY_RUN" == "no" ]]; then
+# ----------------------------
+# Database setup
+# ----------------------------
+setup_database(){
+    info "Setting up MariaDB..."
+    sudo mysql -e "CREATE DATABASE pterodactyl;"
+    sudo mysql -e "CREATE USER 'ptero'@'127.0.0.1' IDENTIFIED BY 'password';"
+    sudo mysql -e "GRANT ALL PRIVILEGES ON pterodactyl.* TO 'ptero'@'127.0.0.1';"
+    sudo mysql -e "FLUSH PRIVILEGES;"
+}
+
+# ----------------------------
+# Nginx configuration
+# ----------------------------
+setup_nginx(){
+    info "Setting up Nginx..."
+    sudo tee /etc/nginx/sites-available/pterodactyl > /dev/null <<EOF
+server {
+    listen 80;
+    server_name _;
+    root $INSTALL_DIR/public;
+
+    index index.php index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+
+    location ~ \.php\$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        include fastcgi_params;
+    }
+}
+EOF
+
+    sudo ln -s /etc/nginx/sites-available/pterodactyl /etc/nginx/sites-enabled/pterodactyl
+    sudo nginx -t
+    sudo systemctl restart nginx
+}
+
+# ----------------------------
+# Optional branding
+# ----------------------------
+add_branding(){
     echo "This is DevelopPanel. Installed using the official Developfluff installer." > "$INSTALL_DIR/README.txt"
     echo "🔥 DEVELOPFLUFF ORIGINAL INSTALLER 🔥" > "$INSTALL_DIR/logo.txt"
     sudo chmod 644 "$INSTALL_DIR/README.txt" "$INSTALL_DIR/logo.txt"
-fi
+}
 
 # ----------------------------
-# Demo systemd service
+# Run all
 # ----------------------------
-SERVICE_NAME="developpanel-demo.service"
-SERVICE_PATH="/etc/systemd/system/$SERVICE_NAME"
+banner
+update_system
+install_docker
+install_panel
+setup_database
+setup_nginx
+add_branding
 
-if [[ "$DRY_RUN" == "no" ]]; then
-    sudo tee "$SERVICE_PATH" > /dev/null <<EOF
-[Unit]
-Description=DevelopPanel Demo Service
-After=network.target
-
-[Service]
-Type=simple
-User=$(whoami)
-WorkingDirectory=$INSTALL_DIR
-ExecStart=/bin/bash -c "while true; do echo 'Developfluff Panel Running'; sleep 30; done"
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    sudo systemctl daemon-reload
-    sudo systemctl enable "$SERVICE_NAME"
-    sudo systemctl start "$SERVICE_NAME"
-fi
-
-info "Installation folder: $INSTALL_DIR"
-
-# ----------------------------
-# Final message
-# ----------------------------
 cat <<EOF
 
 ======== INSTALL COMPLETE ========
 
-$APP_NAME installed to: $INSTALL_DIR
+$APP_NAME installed in: $INSTALL_DIR
 $BRANDING
 Author: Developfluff (Developer)
 YouTube: https://youtube.com/@Developer
 
-A demo systemd service has been created: $SERVICE_NAME
-You can check logs with: sudo journalctl -f -u $SERVICE_NAME
-
-Run 'bash pterodactyl-installer.sh --about' to view credits.
+You can now complete Pterodactyl setup via web browser.
 ===================================
 
 EOF
-
-exit 0
