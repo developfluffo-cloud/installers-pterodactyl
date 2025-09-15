@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ======================================================
-# Pterodactyl Installer by Developfluff
-# Version: 1.0.0
+# Pterodactyl VPS Installer by Developfluff
+# Version: 1.0.1
 # GitHub: https://github.com/developfluffo-cloud/installers-pterodactyl
 # YouTube: https://youtube.com/@Developer
 # License: MIT
@@ -11,9 +11,9 @@ set -euo pipefail
 IFS=$'\n\t'
 
 APP_NAME="DevelopPanel Pterodactyl Installer"
-VERSION="1.0.0"
+VERSION="1.0.1"
 BRANDING="Powered by Developfluff"
-INSTALL_DIR="/opt/DevelopPanel"
+DEFAULT_INSTALL_DIR="/opt/DevelopPanel"
 
 info(){ printf "\n[INFO] %s\n" "$*"; }
 warn(){ printf "\n[WARN] %s\n" "$*"; }
@@ -40,7 +40,7 @@ Options:
   --help        Show this help message
   --version     Print version
   --about       Show about / credits
-  --dir PATH    Install into PATH instead of default ($INSTALL_DIR)
+  --dir PATH    Install into PATH instead of default ($DEFAULT_INSTALL_DIR)
   --dry-run     Show actions without performing them
 EOF
 }
@@ -59,22 +59,18 @@ EOF
 # Parse arguments
 # ----------------------------
 DRY_RUN="no"
-CUSTOM_DIR=""
+INSTALL_DIR="$DEFAULT_INSTALL_DIR"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --help) usage; exit 0 ;;
     --version) echo "$VERSION"; exit 0 ;;
     --about) about; exit 0 ;;
-    --dir) shift; CUSTOM_DIR="$1"; shift ;;
+    --dir) shift; INSTALL_DIR="$1"; shift ;;
     --dry-run) DRY_RUN="yes"; shift ;;
     *) warn "Unknown option: $1"; usage; exit 1 ;;
   esac
 done
-
-if [[ -n "$CUSTOM_DIR" ]]; then
-  INSTALL_DIR="$CUSTOM_DIR"
-fi
 
 # ----------------------------
 # Main installer
@@ -82,22 +78,51 @@ fi
 banner
 info "Starting installer..."
 
-# Create install directory
 if [[ "$DRY_RUN" == "no" ]]; then
-  sudo mkdir -p "$INSTALL_DIR"
-  sudo chown "$(id -u):$(id -g)" "$INSTALL_DIR"
+    sudo mkdir -p "$INSTALL_DIR"
+    sudo chown "$(id -u):$(id -g)" "$INSTALL_DIR"
 fi
 
 info "Creating sample payload files..."
 if [[ "$DRY_RUN" == "no" ]]; then
-  echo "This is DevelopPanel. Installed using the official Developfluff installer." > "$INSTALL_DIR/README.txt"
-  echo "🔥 DEVELOPFLUFF ORIGINAL INSTALLER 🔥" > "$INSTALL_DIR/logo.txt"
-  sudo chmod 644 "$INSTALL_DIR/README.txt" "$INSTALL_DIR/logo.txt"
+    echo "This is DevelopPanel. Installed using the official Developfluff installer." > "$INSTALL_DIR/README.txt"
+    echo "🔥 DEVELOPFLUFF ORIGINAL INSTALLER 🔥" > "$INSTALL_DIR/logo.txt"
+    sudo chmod 644 "$INSTALL_DIR/README.txt" "$INSTALL_DIR/logo.txt"
+fi
+
+# ----------------------------
+# Demo systemd service
+# ----------------------------
+SERVICE_NAME="developpanel-demo.service"
+SERVICE_PATH="/etc/systemd/system/$SERVICE_NAME"
+
+if [[ "$DRY_RUN" == "no" ]]; then
+    sudo tee "$SERVICE_PATH" > /dev/null <<EOF
+[Unit]
+Description=DevelopPanel Demo Service
+After=network.target
+
+[Service]
+Type=simple
+User=$(whoami)
+WorkingDirectory=$INSTALL_DIR
+ExecStart=/bin/bash -c "while true; do echo 'Developfluff Panel Running'; sleep 30; done"
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$SERVICE_NAME"
+    sudo systemctl start "$SERVICE_NAME"
 fi
 
 info "Installation folder: $INSTALL_DIR"
 
+# ----------------------------
 # Final message
+# ----------------------------
 cat <<EOF
 
 ======== INSTALL COMPLETE ========
@@ -106,6 +131,9 @@ $APP_NAME installed to: $INSTALL_DIR
 $BRANDING
 Author: Developfluff (Developer)
 YouTube: https://youtube.com/@Developer
+
+A demo systemd service has been created: $SERVICE_NAME
+You can check logs with: sudo journalctl -f -u $SERVICE_NAME
 
 Run 'bash pterodactyl-installer.sh --about' to view credits.
 ===================================
