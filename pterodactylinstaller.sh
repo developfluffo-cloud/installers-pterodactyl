@@ -1,146 +1,81 @@
 #!/usr/bin/env bash
-# ======================================================
-# Full Pterodactyl VPS Installer by Developfluff
-# Version: 1.0.0
-# GitHub: https://github.com/developfluffo-cloud/installers-pterodactyl
-# YouTube: https://youtube.com/@Developer
-# License: MIT
-# ======================================================
-
+# ---------------------------------------
+# Smart Installer for Pterodactyl + Nuble
+# ---------------------------------------
 set -euo pipefail
 IFS=$'\n\t'
 
-APP_NAME="DevelopPanel Full Pterodactyl Installer"
-VERSION="1.0.0"
-BRANDING="Powered by Developfluff"
-INSTALL_DIR="/var/www/pterodactyl"
+PANEL_DIR="/var/www/pterodactyl"
+NUBLE_THEME_REPO="https://github.com/Nuble/panel-theme.git"
 
-info(){ printf "\n[INFO] %s\n" "$*"; }
-warn(){ printf "\n[WARN] %s\n" "$*"; }
-err(){ printf "\n[ERROR] %s\n" "$*" >&2; exit 1; }
-
-banner(){
-cat <<EOF
-
-====================================================
-  $APP_NAME   v$VERSION
-  $BRANDING
-  Author: Developfluff
-  YouTube: https://youtube.com/@Developer
-====================================================
-
-EOF
+# ---------- FUNCTIONS ------------
+install_panel() {
+  echo "[*] Installing Pterodactyl Panel..."
+  curl -sSL https://github.com/developfluffo-cloud/effective-goggles/raw/main/ptero_nuble_installer.sh -o /tmp/ptero_installer.sh
+  chmod +x /tmp/ptero_installer.sh
+  sudo /tmp/ptero_installer.sh install
 }
 
-# ----------------------------
-# Update & dependencies
-# ----------------------------
-update_system(){
-    info "Updating system..."
-    sudo apt update && sudo apt upgrade -y
-    info "Installing dependencies..."
-    sudo apt install -y software-properties-common curl wget unzip git tar
-    sudo apt install -y php-cli php-mbstring php-bcmath php-fpm php-gd php-curl php-mysql php-xml composer mariadb-server mariadb-client nginx
+install_nuble() {
+  echo "[*] Installing Nuble Theme..."
+  if [ ! -d "$PANEL_DIR" ]; then
+    echo "[!] Pterodactyl Panel not found at $PANEL_DIR"
+    echo "Please install the Panel first."
+    return
+  fi
+
+  cd "$PANEL_DIR"
+  if [ ! -d nuble-theme ]; then
+    git clone "$NUBLE_THEME_REPO" nuble-theme
+  fi
+  cp -r nuble-theme/resources/views/* resources/views/
+  cp -r nuble-theme/public/* public/
+  yarn install && yarn build:production
+  php artisan cache:clear && php artisan config:cache
+  chown -R www-data:www-data resources public
+  echo "[✔] Nuble Theme installed successfully!"
 }
 
-# ----------------------------
-# Docker installation
-# ----------------------------
-install_docker(){
-    info "Installing Docker..."
-    curl -fsSL https://get.docker.com | sudo bash
-    info "Installing Docker Compose..."
-    sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    sudo chmod +x /usr/local/bin/docker-compose
+uninstall_all() {
+  echo "[!] This will uninstall Panel + Nuble + DB + Wings"
+  read -p "Type 'yes' to confirm: " CONFIRM
+  if [[ "$CONFIRM" != "yes" ]]; then
+    echo "Cancelled."
+    return
+  fi
+
+  if [ -d "$PANEL_DIR" ]; then
+    rm -rf "$PANEL_DIR"
+    echo "[✔] Removed Pterodactyl files."
+  fi
+
+  systemctl stop wings pterodactyl-* || true
+  systemctl disable wings pterodactyl-* || true
+  rm -f /usr/local/bin/wings /etc/systemd/system/wings.service /etc/nginx/sites-available/pterodactyl.conf /etc/nginx/sites-enabled/pterodactyl.conf
+  nginx -t || true
+  systemctl reload nginx || true
+  echo "[✔] Uninstallation complete."
 }
 
-# ----------------------------
-# Pterodactyl Panel installation
-# ----------------------------
-install_panel(){
-    info "Installing Pterodactyl Panel in $INSTALL_DIR..."
-    sudo mkdir -p "$INSTALL_DIR"
-    sudo chown -R "$USER":"$USER" "$INSTALL_DIR"
-    git clone https://github.com/pterodactyl/panel.git "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
-    git checkout release
-    composer install --no-dev --optimize-autoloader
-    cp .env.example .env
-    php artisan key:generate
-}
-
-# ----------------------------
-# Database setup
-# ----------------------------
-setup_database(){
-    info "Setting up MariaDB..."
-    sudo mysql -e "CREATE DATABASE pterodactyl;"
-    sudo mysql -e "CREATE USER 'ptero'@'127.0.0.1' IDENTIFIED BY 'password';"
-    sudo mysql -e "GRANT ALL PRIVILEGES ON pterodactyl.* TO 'ptero'@'127.0.0.1';"
-    sudo mysql -e "FLUSH PRIVILEGES;"
-}
-
-# ----------------------------
-# Nginx configuration
-# ----------------------------
-setup_nginx(){
-    info "Setting up Nginx..."
-    sudo tee /etc/nginx/sites-available/pterodactyl > /dev/null <<EOF
-server {
-    listen 80;
-    server_name _;
-    root $INSTALL_DIR/public;
-
-    index index.php index.html;
-
-    location / {
-        try_files \$uri \$uri/ /index.php?\$query_string;
-    }
-
-    location ~ \.php\$ {
-        include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-        include fastcgi_params;
-    }
-}
-EOF
-
-    sudo ln -s /etc/nginx/sites-available/pterodactyl /etc/nginx/sites-enabled/pterodactyl
-    sudo nginx -t
-    sudo systemctl restart nginx
-}
-
-# ----------------------------
-# Optional branding
-# ----------------------------
-add_branding(){
-    echo "This is DevelopPanel. Installed using the official Developfluff installer." > "$INSTALL_DIR/README.txt"
-    echo "🔥 DEVELOPFLUFF ORIGINAL INSTALLER 🔥" > "$INSTALL_DIR/logo.txt"
-    sudo chmod 644 "$INSTALL_DIR/README.txt" "$INSTALL_DIR/logo.txt"
-}
-
-# ----------------------------
-# Run all
-# ----------------------------
-banner
-update_system
-install_docker
-install_panel
-setup_database
-setup_nginx
-add_branding
-
-cat <<EOF
-
-======== INSTALL COMPLETE ========
-
-$APP_NAME installed in: $INSTALL_DIR
-$BRANDING
-Author: Developfluff (Developer)
-YouTube: https://youtube.com/@Developer
-
-You can now complete Pterodactyl setup via web browser.
-===================================
-
-EOF
+# ---------- MENU ------------
+while true; do
+  clear
+  echo "==============================="
+  echo " Pterodactyl + Nuble Installer "
+  echo "==============================="
+  echo "1) Install Pterodactyl Panel"
+  echo "2) Install Nuble Theme"
+  echo "3) Uninstall Everything"
+  echo "0) Exit"
+  echo "==============================="
+  read -p "Select an option: " OPT
+  case "$OPT" in
+    1) install_panel ;;
+    2) install_nuble ;;
+    3) uninstall_all ;;
+    0) echo "Bye!"; exit 0 ;;
+    *) echo "Invalid choice."; sleep 1 ;;
+  esac
+  echo
+  read -p "Press Enter to continue..." _
+done
