@@ -1,81 +1,62 @@
-#!/usr/bin/env bash
-# ---------------------------------------
-# Smart Installer for Pterodactyl + Nuble
-# ---------------------------------------
-set -euo pipefail
-IFS=$'\n\t'
+#!/bin/bash
 
-PANEL_DIR="/var/www/pterodactyl"
-NUBLE_THEME_REPO="https://github.com/Nuble/panel-theme.git"
+# --------------------------
+# Pterodactyl Wings Fix & Cloudflare Tunnel Setup
+# --------------------------
 
-# ---------- FUNCTIONS ------------
-install_panel() {
-  echo "[*] Installing Pterodactyl Panel..."
-  curl -sSL https://github.com/developfluffo-cloud/effective-goggles/raw/main/ptero_nuble_installer.sh -o /tmp/ptero_installer.sh
-  chmod +x /tmp/ptero_installer.sh
-  sudo /tmp/ptero_installer.sh install
-}
+# 1️⃣ Update config.yml
+cat > /etc/pterodactyl/config.yml <<'EOF'
+debug: false
+app_name: Pterodactyl
+uuid: 961bbd6c-fd20-4961-8b97-71d7d7033105
+token_id: FE7m1i2l45h8x0Tj
+token: lqPglqAYkgPlQQ6VreJinNoSEQEvGdO6fgjjozuHsFaaaZHlvx2qjYw95f
 
-install_nuble() {
-  echo "[*] Installing Nuble Theme..."
-  if [ ! -d "$PANEL_DIR" ]; then
-    echo "[!] Pterodactyl Panel not found at $PANEL_DIR"
-    echo "Please install the Panel first."
-    return
-  fi
+api:
+  host: 0.0.0.0
+  port: 8443
+  ssl:
+    enabled: false
+  disable_remote_download: false
+  upload_limit: 100
+  trusted_proxies: []
 
-  cd "$PANEL_DIR"
-  if [ ! -d nuble-theme ]; then
-    git clone "$NUBLE_THEME_REPO" nuble-theme
-  fi
-  cp -r nuble-theme/resources/views/* resources/views/
-  cp -r nuble-theme/public/* public/
-  yarn install && yarn build:production
-  php artisan cache:clear && php artisan config:cache
-  chown -R www-data:www-data resources public
-  echo "[✔] Nuble Theme installed successfully!"
-}
+system:
+  root_directory: /var/lib/pterodactyl
+  log_directory: /var/log/pterodactyl
+  data: /var/lib/pterodactyl/volumes
+  archive_directory: /var/lib/pterodactyl/archives
 
-uninstall_all() {
-  echo "[!] This will uninstall Panel + Nuble + DB + Wings"
-  read -p "Type 'yes' to confirm: " CONFIRM
-  if [[ "$CONFIRM" != "yes" ]]; then
-    echo "Cancelled."
-    return
-  fi
+sftp:
+  host: 0.0.0.0
+  port: 2022
+EOF
 
-  if [ -d "$PANEL_DIR" ]; then
-    rm -rf "$PANEL_DIR"
-    echo "[✔] Removed Pterodactyl files."
-  fi
+echo "[✔] config.yml updated."
 
-  systemctl stop wings pterodactyl-* || true
-  systemctl disable wings pterodactyl-* || true
-  rm -f /usr/local/bin/wings /etc/systemd/system/wings.service /etc/nginx/sites-available/pterodactyl.conf /etc/nginx/sites-enabled/pterodactyl.conf
-  nginx -t || true
-  systemctl reload nginx || true
-  echo "[✔] Uninstallation complete."
-}
+# 2️⃣ Ensure directories exist
+sudo mkdir -p /var/lib/pterodactyl /var/log/pterodactyl
+sudo chown -R root:root /var/lib/pterodactyl /var/log/pterodactyl
+echo "[✔] Required directories created."
 
-# ---------- MENU ------------
-while true; do
-  clear
-  echo "==============================="
-  echo " Pterodactyl + Nuble Installer "
-  echo "==============================="
-  echo "1) Install Pterodactyl Panel"
-  echo "2) Install Nuble Theme"
-  echo "3) Uninstall Everything"
-  echo "0) Exit"
-  echo "==============================="
-  read -p "Select an option: " OPT
-  case "$OPT" in
-    1) install_panel ;;
-    2) install_nuble ;;
-    3) uninstall_all ;;
-    0) echo "Bye!"; exit 0 ;;
-    *) echo "Invalid choice."; sleep 1 ;;
-  esac
-  echo
-  read -p "Press Enter to continue..." _
-done
+# 3️⃣ Restart Wings
+sudo systemctl daemon-reload
+sudo systemctl restart wings
+
+# Wait a few seconds and check status
+sleep 3
+sudo systemctl status wings --no-pager
+
+# 4️⃣ Install cloudflared (if not installed)
+if ! command -v cloudflared &> /dev/null; then
+    echo "[ℹ] Installing cloudflared..."
+    wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -O /tmp/cloudflared.deb
+    sudo dpkg -i /tmp/cloudflared.deb
+fi
+
+# 5️⃣ Run Cloudflare Tunnel for Wings HTTP
+echo "[ℹ] Starting Cloudflare Tunnel..."
+nohup cloudflared tunnel --url http://localhost:8443 --no-autoupdate --name wings-tunnel > /var/log/cloudflared-wings.log 2>&1 &
+
+echo "[✔] Cloudflare Tunnel started for wings.youdad.qzz.io -> localhost:8443"
+echo "Check tunnel logs: tail -f /var/log/cloudflared-wings.log"
